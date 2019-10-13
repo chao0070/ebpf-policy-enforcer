@@ -28,6 +28,7 @@ device = sys.argv[1]
 filename = sys.argv[2]
 
 pToV = {'tcp':6, 'udp':17}
+VToP = {'6':'tcp', '17':'udp'}
 
 def dottedQuadToNum(ip):
     "convert decimal dotted quad string to long integer"
@@ -36,6 +37,37 @@ def dottedQuadToNum(ip):
 def ipToN(ip):
     h = dottedQuadToNum(ip)
     return socket.htonl(h)
+
+def nToIP(n):
+    ipint = socket.ntohl(n)
+    return '.'.join([str(ipint >> (i << 3) & 0xFF) for i in range(4)[::-1]])
+
+def processMessage(msg):
+    withProto = msg.startswith('proto')
+    withDip = msg.startswith('dip')
+    parsedMsg = ""
+    if (withProto):
+        proto,sip,sp = msg.split(',')
+        _,pro = proto.split(':')
+        _,ipadd = sip.split(':')
+        _,port = sp.split(':')
+        parsedMsg += "proto: " + VToP[pro]
+        parsedMsg += ", sip: " + nToIP(int(ipadd))
+        parsedMsg += ", sp: " + str(socket.ntohs(int(port)))
+    elif (withDip):
+        dip,dp = msg.split(',')
+        _,ipadd = dip.split(':')
+        _,port = dp.split(':')
+        parsedMsg += "dip: " + nToIP(int(ipadd))
+        parsedMsg += ", dp: " + str(socket.ntohs(int(port)))
+    else:
+        parsedMsg = msg
+    return parsedMsg
+
+# print processMessage("proto:6,sip:16777343,sp:16415")
+# print processMessage("dip:16777343,dp:62674")
+# print processMessage("proto:6,sip:3290159532,sp:20480")
+# print processMessage("dip:251789322,dp:53950")
 
 def parse_policy_file(file_name):
     input_file = csv.DictReader(open(file_name))
@@ -201,8 +233,8 @@ drop:
     goto done;
 
 pass:
-    bpf_trace_printk("proto:%d,sip:%d,sp:%d\\n", proto, src_ip, src_port);
-    bpf_trace_printk("dip:%d,dp:%d\\n", dest_ip, dest_port); 
+    bpf_trace_printk("proto:%d,sip:%lu,sp:%u\\n", proto, src_ip, src_port);
+    bpf_trace_printk("dip:%lu,dp:%u\\n", dest_ip, dest_port); 
     rc = XDP_PASS;
 
 done:
@@ -213,8 +245,6 @@ done:
 prog_text = prog_text.replace("FILTER_COND", filters)
 
 print prog_text
-
-# exit()
 
 # load BPF program
 b = BPF(text =prog_text , cflags=["-w"])
@@ -227,10 +257,9 @@ print("Printing drops per IP protocol-number, hit CTRL+C to stop")
 while 1:
     try:
         (task, pid, cpu, flags, ts, msg) = b.trace_fields()
-        printb(b"%-18s: %s" % (ts, msg))
+        printb(b"%-18s: %s" % (ts, processMessage(msg)))
     except KeyboardInterrupt:
         print("Removing filter from device")
         break;
 
 b.remove_xdp(device, 0)
-
